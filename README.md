@@ -36,7 +36,7 @@ Ce projet consiste en la mise en place d'une machine virtuelle Ubuntu sur un ser
    - Configurer les scripts de surveillance pour analyser le trafic.
 
      `sudo crontab -e`
-     `cron */5 * * * * /opt/mqtch_watcher.sh`
+     `cron */5 * * * * /opt/mac_watcher.sh`
 
 3. **Mettre en place la liste blanche des adresses MAC :**
    - Modifier les paramètres du serveur DHCP pour n'autoriser que les adresses MAC enregistrées.
