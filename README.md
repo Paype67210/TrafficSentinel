@@ -47,7 +47,7 @@
 ```bash
 # 1. Cloner le projet
 git clone <repository-url>
-cd VM_NetViewer_VLigne
+cd TrafficSentinel
 
 # 2. Configurer l'inventaire Ansible
 # Éditer inventory.ini avec l'IP de votre VM
