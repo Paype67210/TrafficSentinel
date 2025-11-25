@@ -1,0 +1,10 @@
+#Liste des variables à intégrer dans le vault
+
+SQLCIPHER_PASSWORD: MotDePasse_BaseSQL
+SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/Token-Slack_Webhook"
+INTERFACE: Par-Défaut_enp0s5
+ADMIN_USER: Admin_User
+ADMIN_PASSWORD: MotDePasse_Admin
+VM_IP: IP_de_la_VM
+DB_PATH: "/var/lib/mac_filter/database.db"
+MAC_HASH_KEY: Hash_de_codage_des_adresses_MAC 

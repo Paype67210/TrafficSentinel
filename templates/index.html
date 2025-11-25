@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Gestion des Appareils</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .authorized { background-color: #d4edda; }
+        .quarantine { background-color: #fff3cd; }
+        .banned { background-color: #f8d7da; }
+        .add-form { margin: 20px 0; padding: 15px; border: 1px solid #ddd; background-color: #f9f9f9; }
+        .action-buttons { display: flex; gap: 5px; align-items: center; }
+        .btn-update { background-color: #007bff; color: white; border: none; padding: 5px 10px; cursor: pointer; border-radius: 3px; }
+        .btn-delete { background-color: #dc3545; color: white; border: none; padding: 5px 10px; cursor: pointer; border-radius: 3px; }
+        .btn-update:hover { background-color: #0056b3; }
+        .btn-delete:hover { background-color: #c82333; }
+        select { padding: 5px; margin-right: 5px; }
+        .comment-display { cursor: pointer; min-height: 20px; padding: 2px 5px; border-radius: 3px; }
+        .comment-display:hover { background-color: #f8f9fa; }
+        .comment-edit { display: none; }
+        .comment-input { width: 200px; padding: 2px 5px; }
+        .btn-save { background-color: #28a745; color: white; border: none; padding: 3px 8px; cursor: pointer; border-radius: 3px; font-size: 12px; }
+        .btn-cancel { background-color: #6c757d; color: white; border: none; padding: 3px 8px; cursor: pointer; border-radius: 3px; font-size: 12px; margin-left: 3px; }
+        .btn-edit { background-color: #17a2b8; color: white; border: none; padding: 2px 6px; cursor: pointer; border-radius: 3px; font-size: 11px; margin-left: 5px; }
+        
+        /* Styles pour les messages flash */
+        .flash-messages { margin: 20px 0; }
+        .flash-message { padding: 15px; margin-bottom: 10px; border-radius: 4px; }
+        .flash-success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .flash-warning { background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+        .flash-info { background-color: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+        .flash-error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+    </style>
+    <script>
+        function confirmDelete(macAddress) {
+            return confirm(`Êtes-vous sûr de vouloir supprimer l'adresse MAC ${macAddress} ?\n\nCette action est irréversible.`);
+        }
+        
+        function editComment(macAddress) {
+            const displayDiv = document.getElementById('comment-display-' + macAddress);
+            const editDiv = document.getElementById('comment-edit-' + macAddress);
+            const input = document.getElementById('comment-input-' + macAddress);
+            
+            displayDiv.style.display = 'none';
+            editDiv.style.display = 'block';
+            input.focus();
+        }
+        
+        function cancelEdit(macAddress) {
+            const displayDiv = document.getElementById('comment-display-' + macAddress);
+            const editDiv = document.getElementById('comment-edit-' + macAddress);
+            
+            displayDiv.style.display = 'block';
+            editDiv.style.display = 'none';
+        }
+        
+        function saveComment(macAddress) {
+            const form = document.getElementById('comment-form-' + macAddress);
+            form.submit();
+        }
+    </script>
+</head>
+<body>
+    <h1>Gestion des Appareils Réseau</h1>
+    
+    <!-- Messages flash -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            <div class="flash-messages">
+                {% for category, message in messages %}
+                    <div class="flash-message flash-{{ category }}">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+    {% endwith %}
+    
+    <div class="add-form">
+        <h3>Ajouter un nouvel appareil</h3>
+        <form action="/add" method="post">
+            <input type="text" name="mac_address" placeholder="Adresse MAC (ex: aa:bb:cc:dd:ee:ff)" required>
+            <select name="status">
+                <option value="quarantine">Quarantaine</option>
+                <option value="authorized">Autorisé</option>
+                <option value="banned">Interdit</option>
+            </select>
+            <input type="text" name="comment" placeholder="Commentaire (optionnel)">
+            <button type="submit" class="btn-update">Ajouter</button>
+        </form>
+    </div>
+
+    <table>
+        <tr>
+            <th>Adresse MAC</th>
+            <th>Statut</th>
+            <th>Premier vu</th>
+            <th>Dernière activité</th>
+            <th>Commentaire</th>
+            <th>Actions</th>
+        </tr>
+        {% for mac in macs %}
+        <tr class="{{ mac[1] }}">
+            <td><code>{{ mac[0] }}</code></td>
+            <td>
+                {% if mac[1] == 'authorized' %}✅ Autorisé
+                {% elif mac[1] == 'quarantine' %}⚠️ Quarantaine
+                {% else %}❌ Interdit{% endif %}
+            </td>
+            <td>{{ mac[2] if mac[2] else 'N/A' }}</td>
+            <td>{{ mac[3] if mac[3] else 'N/A' }}</td>
+            <td>
+                <div id="comment-display-{{ mac[0] | replace(':', '') }}" class="comment-display" onclick="editComment('{{ mac[0] | replace(':', '') }}')">
+                    {{ mac[4] if mac[4] else 'Cliquer pour ajouter un commentaire' }}
+                    <button class="btn-edit" onclick="event.stopPropagation(); editComment('{{ mac[0] | replace(':', '') }}');">✏️</button>
+                </div>
+                <div id="comment-edit-{{ mac[0] | replace(':', '') }}" class="comment-edit">
+                    <form id="comment-form-{{ mac[0] | replace(':', '') }}" action="/update_comment" method="post" style="display: inline;">
+                        <input type="hidden" name="mac_address" value="{{ mac[0] }}">
+                        <input type="text" id="comment-input-{{ mac[0] | replace(':', '') }}" name="comment" value="{{ mac[4] if mac[4] else '' }}" class="comment-input" placeholder="Entrer un commentaire">
+                        <button type="button" class="btn-save" onclick="saveComment('{{ mac[0] | replace(':', '') }}');">💾</button>
+                        <button type="button" class="btn-cancel" onclick="cancelEdit('{{ mac[0] | replace(':', '') }}');">✖️</button>
+                    </form>
+                </div>
+            </td>
+            <td>
+                <div class="action-buttons">
+                    <form action="/update" method="post" style="display: inline;">
+                        <input type="hidden" name="mac_address" value="{{ mac[0] }}">
+                        <select name="status">
+                            <option value="authorized" {% if mac[1] == 'authorized' %}selected{% endif %}>Autorisé</option>
+                            <option value="quarantine" {% if mac[1] == 'quarantine' %}selected{% endif %}>Quarantaine</option>
+                            <option value="banned" {% if mac[1] == 'banned' %}selected{% endif %}>Interdit</option>
+                        </select>
+                        <button type="submit" class="btn-update">Mettre à jour</button>
+                    </form>
+                    
+                    <form action="/delete" method="post" style="display: inline;" onsubmit="return confirmDelete('{{ mac[0] }}')">
+                        <input type="hidden" name="mac_address" value="{{ mac[0] }}">
+                        <button type="submit" class="btn-delete">🗑️ Supprimer</button>
+                    </form>
+                </div>
+            </td>
+        </tr>
+        {% endfor %}
+    </table>
+
+    <div style="margin-top: 20px;">
+        <p><strong>Légende :</strong></p>
+        <ul>
+            <li><span style="color: #155724; background-color: #d4edda; padding: 2px 5px;">✅ Autorisé</span> - Appareil autorisé sur le réseau</li>
+            <li><span style="color: #856404; background-color: #fff3cd; padding: 2px 5px;">⚠️ Quarantaine</span> - Appareil détecté, en attente de validation</li>
+            <li><span style="color: #721c24; background-color: #f8d7da; padding: 2px 5px;">❌ Interdit</span> - Appareil bloqué</li>
+        </ul>
+    </div>
+</body>
+</html>

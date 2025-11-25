@@ -1,0 +1,557 @@
+---
+- hosts: Traffic_Sentinel
+  become: yes  # Exécute les tâches en root (sudo)
+  vars_files:
+    - /home/philippe/Bureau/VM_NetViewer_V1/vault.yml
+  tasks:
+    - name: Mettre à jour les paquets
+      apt:
+        update_cache: yes
+        upgrade: dist
+      when: ansible_os_family == 'Debian'
+
+    - name: Installer des paquets utiles
+      apt:
+        name: [
+          "python3", "python3-pip", "python3-flask", "sqlite3", 
+          "curl", "git", "ufw", "arp-scan", "iptables",
+          "nginx", "certbot", "apache2-utils", "sqlcipher",
+          "python3-venv"
+        ]
+        state: present
+      when: ansible_os_family == 'Debian'
+
+    - name: Configurer le pare-feu (UFW)
+      ufw:
+        rule: allow
+        port: "22"
+        proto: tcp
+
+    - name: Activer UFW
+      service:
+        name: ufw
+        state: started
+        enabled: yes
+
+    - name: Ouvrir le port HTTP (80) dans UFW
+      ufw:
+        rule: allow
+        port: "80"
+        proto: tcp
+
+    - name: Ouvrir le port HTTPS (443) dans UFW
+      ufw:
+        rule: allow
+        port: "443"
+        proto: tcp
+
+    - name: Installer le paquet ssl-cert pour les certificats auto-signés
+      apt:
+        name: ssl-cert
+        state: present
+
+    - name: Générer les certificats SSL auto-signés
+      command: make-ssl-cert generate-default-snakeoil --force-overwrite
+      args:
+        creates: /etc/ssl/certs/ssl-cert-snakeoil.pem
+
+    - name: Créer le répertoire de configuration nginx personnalisé
+      file:
+        path: /etc/nginx/sites-available
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Supprimer la configuration nginx par défaut
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: restart nginx
+
+    - name: Créer la configuration nginx pour Traffic Sentinel
+      copy:
+        content: |
+          server {
+              listen 80;
+              server_name {{ ansible_host }};
+              
+              # Redirection vers HTTPS
+              return 301 https://$server_name$request_uri;
+          }
+          
+          server {
+              listen 443 ssl http2;
+              server_name {{ ansible_host }};
+              
+              # Configuration SSL (à adapter selon besoins)
+              ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;
+              ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
+              
+              # Configuration de sécurité SSL
+              ssl_protocols TLSv1.2 TLSv1.3;
+              ssl_ciphers HIGH:!aNULL:!MD5;
+              ssl_prefer_server_ciphers on;
+              
+              # Configuration du proxy vers l'application Flask
+              location / {
+                  proxy_pass http://127.0.0.1:5000;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+              }
+              
+              # Configuration pour les fichiers statiques
+              location /static/ {
+                  alias /opt/traffic_sentinel/static/;
+                  expires 30d;
+                  add_header Cache-Control "public, immutable";
+              }
+              
+              # Logs
+              access_log /var/log/nginx/traffic_sentinel_access.log;
+              error_log /var/log/nginx/traffic_sentinel_error.log;
+          }
+        dest: /etc/nginx/sites-available/traffic_sentinel
+        owner: root
+        group: root
+        mode: '0644'
+      notify: restart nginx
+
+    - name: Activer la configuration nginx Traffic Sentinel
+      file:
+        src: /etc/nginx/sites-available/traffic_sentinel
+        dest: /etc/nginx/sites-enabled/traffic_sentinel
+        state: link
+      notify: restart nginx
+
+    - name: Créer le répertoire pour les fichiers statiques
+      file:
+        path: /opt/traffic_sentinel/static
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0755'
+
+    - name: Tester la configuration nginx
+      command: nginx -t
+      register: nginx_test
+      changed_when: false
+
+    - name: Démarrer et activer nginx
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Créer le répertoire de l'application Traffic Sentinel
+      file:
+        path: /opt/traffic_sentinel
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0755'
+
+    - name: Copier le script Python de l'application principale
+      copy:
+        src: /home/philippe/Bureau/VM_NetViewer_V1/traffic_sentinel.py
+        dest: /opt/traffic_sentinel/traffic_sentinel.py
+        owner: www-data
+        group: www-data
+        mode: '0755'
+
+    - name: Créer le répertoire templates pour Flask
+      file:
+        path: /opt/traffic_sentinel/templates
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0755'
+
+    - name: Copier le script Python de l'interface web
+      copy:
+        src: /home/philippe/Bureau/VM_NetViewer_V1/web_interface.py
+        dest: /opt/traffic_sentinel/web_interface.py
+        owner: www-data
+        group: www-data
+        mode: '0755'
+
+    - name: Copier le template HTML
+      copy:
+        src: /home/philippe/Bureau/VM_NetViewer_V1/templates/index.html
+        dest: /opt/traffic_sentinel/templates/index.html
+        owner: www-data
+        group: www-data
+        mode: '0644'
+
+    - name: Copier les scripts de diagnostic et de test
+      copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        owner: www-data
+        group: www-data
+        mode: '0755'
+      loop:
+        - { src: "/home/philippe/Bureau/VM_NetViewer_V1/log_viewer.py", dest: "/opt/traffic_sentinel/log_viewer.py" }
+        - { src: "/home/philippe/Bureau/VM_NetViewer_V1/freebox_diagnostic.py", dest: "/opt/traffic_sentinel/freebox_diagnostic.py" }
+        - { src: "/home/philippe/Bureau/VM_NetViewer_V1/freebox_permissions_check.py", dest: "/opt/traffic_sentinel/freebox_permissions_check.py" }
+        - { src: "/home/philippe/Bureau/VM_NetViewer_V1/test_session_renewal.py", dest: "/opt/traffic_sentinel/test_session_renewal.py" }
+        - { src: "/home/philippe/Bureau/VM_NetViewer_V1/freebox_reauth.py", dest: "/opt/traffic_sentinel/freebox_reauth.py" }
+        - { src: "/home/philippe/Bureau/VM_NetViewer_V1/test_session_fix.py", dest: "/opt/traffic_sentinel/test_session_fix.py" }
+        - { src: "/home/philippe/Bureau/VM_NetViewer_V1/fix_permissions.py", dest: "/opt/traffic_sentinel/fix_permissions.py" }
+      tags: [scripts, diagnostic, always]
+
+    - name: Configurer les permissions et répertoires pour les tokens
+      block:
+        - name: Créer les répertoires nécessaires
+          file:
+            path: "{{ item }}"
+            state: directory
+            owner: www-data
+            group: www-data
+            mode: '0755'
+          loop:
+            - /opt/traffic_sentinel
+            - /var/log/traffic_sentinel
+
+        - name: Vérifier l'existence du fichier de tokens
+          stat:
+            path: /etc/traffic_sentinel_tokens.json
+          register: ansible_stat_result
+
+        - name: Corriger les permissions du fichier de tokens principal
+          file:
+            path: /etc/traffic_sentinel_tokens.json
+            owner: www-data
+            group: www-data
+            mode: '0666'
+          when: ansible_stat_result.stat.exists
+
+        - name: Créer des copies de sauvegarde des tokens
+          copy:
+            src: /etc/traffic_sentinel_tokens.json
+            dest: "{{ item }}"
+            owner: www-data
+            group: www-data
+            mode: '0666'
+            remote_src: yes
+          loop:
+            - /opt/traffic_sentinel/tokens.json
+            - /tmp/traffic_sentinel_tokens.json
+          when: ansible_stat_result.stat.exists
+          ignore_errors: yes
+
+      tags: [permissions, always]
+
+    - name: Copier le script de monitoring Traffic Sentinel
+      copy:
+        src: /home/philippe/Bureau/VM_NetViewer_V1/traffic_sentinel.py
+        dest: /opt/traffic_sentinel/traffic_sentinel.py
+        owner: www-data
+        group: www-data
+        mode: '0755'
+
+    - name: Créer le service systemd pour l'application Flask
+      copy:
+        content: |
+          [Unit]
+          Description=Traffic Sentinel Web Interface
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=www-data
+          Group=www-data
+          WorkingDirectory=/opt/traffic_sentinel
+          Environment=PATH=/usr/bin
+          Environment=DB_PATH={{ DB_PATH }}
+          ExecStart=/usr/bin/python3 /opt/traffic_sentinel/web_interface.py
+          Restart=always
+          RestartSec=3
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/traffic-sentinel.service
+        owner: root
+        group: root
+        mode: '0644'
+      notify: restart traffic-sentinel
+
+    - name: Recharger systemd et démarrer le service Traffic Sentinel
+      systemd:
+        name: traffic-sentinel
+        daemon_reload: yes
+        state: started
+        enabled: yes
+
+    - name: Créer le service systemd pour le monitoring réseau
+      copy:
+        content: |
+          [Unit]
+          Description=Traffic Sentinel Network Monitor
+          After=network.target traffic-sentinel.service
+          Wants=traffic-sentinel.service
+
+          [Service]
+          Type=simple
+          User=root
+          Group=root
+          WorkingDirectory=/opt/traffic_sentinel
+          Environment=PATH=/usr/bin:/usr/sbin
+          Environment=DB_PATH={{ DB_PATH }}
+          Environment=INTERFACE={{ NETWORK_INTERFACE | default('enp0s5') }}
+          Environment=SCAN_INTERVAL={{ SCAN_INTERVAL | default('300') }}
+          Environment=SLACK_WEBHOOK_URL={{ SLACK_WEBHOOK_URL | default('') }}
+          ExecStart=/usr/bin/python3 /opt/traffic_sentinel/traffic_sentinel.py
+          Restart=always
+          RestartSec=10
+          StandardOutput=journal
+          StandardError=journal
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/traffic-sentinel-monitor.service
+        owner: root
+        group: root
+        mode: '0644'
+      notify: restart traffic-sentinel-monitor
+
+    - name: Démarrer et activer le service de monitoring
+      systemd:
+        name: traffic-sentinel-monitor
+        daemon_reload: yes
+        state: started
+        enabled: yes
+
+    - name: Copier le script d'authentification Freebox
+      copy:
+        src: freebox_auth.py
+        dest: /opt/traffic_sentinel/freebox_auth.py
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Copier le script d'intégration Freebox
+      copy:
+        src: freebox_integration.py
+        dest: /opt/traffic_sentinel/freebox_integration.py
+        owner: root
+        group: root
+        mode: '0755'
+        
+    - name: Copier le script de configuration gateway
+      copy:
+        src: setup_gateway.py
+        dest: /opt/traffic_sentinel/setup_gateway.py
+        owner: root
+        group: root
+        mode: '0755'
+      register: iptables_setup
+      changed_when: false
+      failed_when: false
+
+    - name: Copier le script de visualisation des logs
+      copy:
+        src: log_viewer.py
+        dest: /opt/traffic_sentinel/log_viewer.py
+        owner: root
+        group: root
+        mode: '0755'
+      tags: ['scripts', 'always']
+
+    - name: Copier le script de diagnostic Freebox
+      copy:
+        src: freebox_diagnostic.py
+        dest: /opt/traffic_sentinel/freebox_diagnostic.py
+        owner: root
+        group: root
+        mode: '0755'
+      tags: ['scripts', 'always']
+
+    - name: Copier le script de test d'intégration Freebox
+      copy:
+        src: test_freebox_integration.py
+        dest: /opt/traffic_sentinel/test_freebox_integration.py
+        owner: root
+        group: root
+        mode: '0755'
+      tags: ['scripts', 'always']
+
+    - name: Créer le répertoire des logs Traffic Sentinel
+      file:
+        path: /var/log/traffic_sentinel
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      tags: ['always']
+
+    - name: Créer des liens symboliques pour les outils de diagnostic
+      file:
+        src: /opt/traffic_sentinel/log_viewer.py
+        dest: /usr/local/bin/traffic-logs
+        state: link
+        owner: root
+        group: root
+      tags: ['scripts', 'always']
+
+    - name: Créer un lien symbolique pour le diagnostic Freebox
+      file:
+        src: /opt/traffic_sentinel/freebox_diagnostic.py
+        dest: /usr/local/bin/traffic-diagnostic
+        state: link
+        owner: root
+        group: root
+      tags: ['scripts', 'always']
+
+    - name: Créer un script d'aide Traffic Sentinel
+      copy:
+        content: |
+          #!/bin/bash
+          echo "🚀 TRAFFIC SENTINEL - OUTILS DE GESTION"
+          echo "======================================"
+          echo ""
+          echo "📋 COMMANDES DISPONIBLES:"
+          echo ""
+          echo "🔍 LOGS ET DIAGNOSTIC:"
+          echo "  traffic-logs tail --log main        # Afficher les logs principaux"
+          echo "  traffic-logs tail --log freebox     # Afficher les logs Freebox"
+          echo "  traffic-logs follow --log freebox   # Suivre les logs Freebox en temps réel"
+          echo "  traffic-logs analyze --hours 24     # Analyser les opérations des 24h"
+          echo "  traffic-logs health                 # Vérifier l'état des logs"
+          echo ""
+          echo "🩺 DIAGNOSTIC:"
+          echo "  traffic-diagnostic                  # Diagnostic complet Freebox"
+          echo ""
+          echo "🔧 SERVICES:"
+          echo "  systemctl status traffic-sentinel          # État du service web"
+          echo "  systemctl status traffic-sentinel-monitor  # État du monitoring"
+          echo "  systemctl restart traffic-sentinel-monitor # Redémarrer le monitoring"
+          echo ""
+          echo "📁 EMPLACEMENTS:"
+          echo "  /opt/traffic_sentinel/              # Scripts et application"
+          echo "  /var/log/traffic_sentinel/          # Fichiers de logs"
+          echo "  /etc/traffic_sentinel_tokens.json   # Tokens Freebox"
+          echo ""
+        dest: /usr/local/bin/traffic-help
+        owner: root
+        group: root
+        mode: '0755'
+      tags: ['scripts', 'always']
+
+    - name: Configurer la rotation des logs Traffic Sentinel
+      copy:
+        content: |
+          /var/log/traffic_sentinel/*.log {
+            daily
+            missingok
+            rotate 30
+            compress
+            delaycompress
+            notifempty
+            create 644 root root
+            postrotate
+              systemctl reload traffic-sentinel-monitor 2>/dev/null || true
+            endscript
+          }
+        dest: /etc/logrotate.d/traffic-sentinel
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Configurer la base de données SQLite
+      shell: |
+        mkdir -p "$(dirname {{ DB_PATH }})"
+        chown www-data:www-data "$(dirname {{ DB_PATH }})"
+        sqlite3 "{{ DB_PATH }}" "CREATE TABLE IF NOT EXISTS mac_addresses (
+          mac_address TEXT PRIMARY KEY,
+          status TEXT CHECK(status IN ('authorized', 'quarantine', 'banned')),
+          first_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+          last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+          comment TEXT
+        );"
+        chown www-data:www-data "{{ DB_PATH }}"
+      args:
+        creates: "{{ DB_PATH }}"
+      tags: test
+
+    - name: Vérifier que les scripts sont bien copiés
+      stat:
+        path: "{{ item }}"
+      register: script_check
+      failed_when: not script_check.stat.exists
+      loop:
+        - /opt/traffic_sentinel/traffic_sentinel.py
+        - /opt/traffic_sentinel/freebox_auth.py
+        - /opt/traffic_sentinel/log_viewer.py
+        - /opt/traffic_sentinel/freebox_diagnostic.py
+        - /opt/traffic_sentinel/test_freebox_integration.py
+      tags: validate
+      when: not ansible_check_mode
+
+    - name: Vérifier que les liens symboliques sont créés
+      stat:
+        path: "{{ item }}"
+      register: link_check
+      failed_when: not link_check.stat.exists or not link_check.stat.islnk
+      loop:
+        - /usr/local/bin/traffic-logs
+        - /usr/local/bin/traffic-diagnostic
+      tags: validate
+      when: not ansible_check_mode
+
+    - name: Vérifier que le script d'aide est créé
+      stat:
+        path: /usr/local/bin/traffic-help
+      register: help_script_check
+      failed_when: not help_script_check.stat.exists or not help_script_check.stat.executable
+      tags: validate
+      when: not ansible_check_mode
+
+    - name: Vérifier que le répertoire de logs est créé
+      stat:
+        path: /var/log/traffic_sentinel
+      register: log_dir_check
+      failed_when: not log_dir_check.stat.exists or not log_dir_check.stat.isdir
+      tags: validate
+      when: not ansible_check_mode
+
+    - name: Afficher un résumé de l'installation
+      debug:
+        msg: |
+          🎉 INSTALLATION TRAFFIC SENTINEL TERMINÉE
+          ==========================================
+          
+          📋 COMMANDES UTILES:
+          • traffic-help                    # Afficher l'aide complète
+          • traffic-logs health            # Vérifier l'état des logs
+          • traffic-diagnostic             # Diagnostic Freebox
+          • systemctl status traffic-sentinel-monitor  # État du service
+          
+          📁 EMPLACEMENTS IMPORTANTS:
+          • Scripts: /opt/traffic_sentinel/
+          • Logs: /var/log/traffic_sentinel/
+          • Tokens: /etc/traffic_sentinel_tokens.json
+          
+          🔧 PROCHAINES ÉTAPES:
+          1. Vérifiez les services: systemctl status traffic-sentinel
+          2. Testez la connexion Freebox: traffic-diagnostic
+          3. Surveillez les logs: traffic-logs follow --log freebox
+      tags: validate
+
+  handlers:
+    - name: restart nginx
+      service:
+        name: nginx
+        state: restarted
+
+    - name: restart traffic-sentinel
+      systemd:
+        name: traffic-sentinel
+        state: restarted
+
+    - name: restart traffic-sentinel-monitor
+      systemd:
+        name: traffic-sentinel-monitor
+        state: restarted
